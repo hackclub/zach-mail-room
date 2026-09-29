@@ -58,7 +58,8 @@ Where tests go:
 make db        # shared dev Postgres via docker compose (127.0.0.1:54329)
 make test      # go test ./... + vitest   (make test-go / make test-web)
 make check     # gofmt, go vet, svelte-check
-make dev       # Go server :8080 + Vite :5173 (proxies /api, /auth) — open http://localhost:5173
+make dev       # Go server :8080 + Vite :5173 (proxies /api, /auth) — http://localhost:5173,
+               # or http://porygon:5173 from other tailnet machines (Zach browses from crobat)
 make server    # Go server only; serves web/build if built (make web)
 make docker    # production image
 ```
@@ -110,8 +111,11 @@ make import TRACKING=/tmp/zmr-tracking.csv FILES='…'   # writes to $DATABASE_U
   `external_id`), so re-exports are safe to re-run.
 - Contents come from `custom_instructions` (`"10 Pri/Bok/Mini25/1st, 50 Sti/Bra/O&H/Lap"`).
   Unknown SKUs become **hidden** items, named from mail.hackclub.com.
-- `Send To Warehouse=true` → `dispatched`, and `airtable_record_id` is set to `Created records`.
-  Otherwise the request is `pending`, with an internal note to review it before shipping.
+- A row with an Airtable record (`Created records`) → `dispatched`, with `airtable_record_id`
+  set. This holds even if `Send To Warehouse` is blank, because that flag lags: Zach confirmed
+  that rows with a blank flag were already queued. Only rows with no record become `pending`.
+- Imported requests can never be shipped from this app (`dispatch` returns 409). They ship
+  through the Airtable warehouse base, and this guard prevents double shipments.
   "Requestor paid N USD" → `shipping_fee_cents` and `paid_at`.
 - People are matched by email. A person with no account gets a placeholder user (`hca_id NULL`),
   which their first Hack Club Auth sign-in claims. Imported history then counts toward their
@@ -124,8 +128,8 @@ make import TRACKING=/tmp/zmr-tracking.csv FILES='…'   # writes to $DATABASE_U
 - **Exports and tracking files contain personal data. Keep them outside the repo (it's
   public).**
 - Imported 2026-09-29 into the dev DB: Mini-Magazine (320), Staff T-Shirt (29), Hackpad Poster
-  (66), Sunbeam Poster (34). That's 449 requests (446 dispatched, 442 with tracking; 3 pending
-  review) across 372 people.
+  (66), Sunbeam Poster (34). That's 449 requests (all dispatched, 442 with tracking) across 372
+  people.
 
 ## Deploying (Orchard)
 
@@ -142,8 +146,18 @@ make import TRACKING=/tmp/zmr-tracking.csv FILES='…'   # writes to $DATABASE_U
 
 - **Hack Club Auth**: OAuth2 authorization code flow. The token comes from `/oauth/token`, then
   identity from `GET /api/v1/me` (`identity.primary_email`, `id`, `slack_id`,
-  `verification_status`). The default scopes are the community set. We're HQ, so `address` can
-  be requested to prefill shipping.
+  `verification_status`, `phone_number`, `addresses[]` with a `primary` flag).
+  - Scopes the app supports: `openid email name profile phone birthdate address
+    verification_status slack_id legal_name basic_info`. We request
+    `openid email name slack_id verification_status address phone`: the primary address and
+    phone prefill the request form and cover international customs. Stored in
+    `users.address`; a sign-in without the address scope keeps the old value.
+  - Registered redirect URIs (2026-09-29): `http://localhost:5173/auth/callback` and
+    `http://porygon:5173/auth/callback`. Add the production `https://<domain>/auth/callback`
+    before deploying.
+  - The app serves several origins: `BASE_URL` plus `EXTRA_BASE_URLS`. Each request's `Host`
+    picks the matching origin for the OAuth `redirect_uri`, cookies, and CSRF `Origin` checks,
+    so the Vite proxy must keep `Host` (the default; no `changeOrigin`).
 - **mail.hackclub.com (Theseus)** (source: github.com/hackclub/theseus):
   - Auth is `Authorization: Bearer <THESEUS_API_KEY>`.
   - `GET /api/v1/warehouse/skus` returns `{"skus":[…]}` (enabled and in stock).
@@ -166,7 +180,7 @@ make import TRACKING=/tmp/zmr-tracking.csv FILES='…'   # writes to $DATABASE_U
   reset to the internal disk (`~/.orbstack/vmconfig.json`); the old config is saved as
   `vmconfig.json.bak-porygonwork-2026-09-29`.
 - CSRF: mutating `/api/*` calls must be `Content-Type: application/json`, and their `Origin`
-  (if present) must equal `BASE_URL`. In dev, `BASE_URL` is the Vite origin
-  (`http://localhost:5173`).
+  (if present) must be `BASE_URL` or one of `EXTRA_BASE_URLS`. In dev those are the Vite
+  origins (`http://localhost:5173`, `http://porygon:5173`).
 - The service worker never caches `/api/*` or `/auth/*`. Keep it that way; limits and statuses
   must be live.

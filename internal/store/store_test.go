@@ -230,3 +230,25 @@ func TestSubmissions(t *testing.T) {
 }
 
 func noCheck(map[int64]int, *time.Time) error { return nil }
+
+func TestUpsertUserKeepsHCAAddress(t *testing.T) {
+	s := newStore(t)
+	home := swag.Address{FirstName: "O", LastName: "D", Line1: "15 Falls Rd", City: "Shelburne", State: "VT", PostalCode: "05482", Country: "US", Phone: "+18025550199"}
+	u, err := s.UpsertUser(ctx, auth.Identity{ID: "ident!1", Email: "a@x.com", Address: &home})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.Address == nil || *u.Address != home {
+		t.Fatalf("address = %+v", u.Address)
+	}
+	// A later login without the address scope must not wipe it.
+	u, _ = s.UpsertUser(ctx, auth.Identity{ID: "ident!1", Email: "a@x.com"})
+	if u.Address == nil || u.Address.Line1 != "15 Falls Rd" {
+		t.Fatalf("address lost: %+v", u.Address)
+	}
+	tok, _ := s.CreateSession(ctx, u.ID, time.Hour)
+	bySession, _ := s.UserBySession(ctx, tok)
+	if bySession.Address == nil || bySession.Address.City != "Shelburne" {
+		t.Fatalf("session user address = %+v", bySession.Address)
+	}
+}

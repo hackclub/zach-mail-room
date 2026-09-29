@@ -35,19 +35,20 @@ func (s *Store) Ping(ctx context.Context) error { return s.pool.Ping(ctx) }
 // ---- users & sessions ----
 
 type User struct {
-	ID                 int64  `json:"id"`
-	HCAID              string `json:"-"`
-	Email              string `json:"email"`
-	Name               string `json:"name"`
-	SlackID            string `json:"slack_id"`
-	VerificationStatus string `json:"verification_status"`
+	ID                 int64         `json:"id"`
+	HCAID              string        `json:"-"`
+	Email              string        `json:"email"`
+	Name               string        `json:"name"`
+	SlackID            string        `json:"slack_id"`
+	VerificationStatus string        `json:"verification_status"`
+	Address            *swag.Address `json:"address,omitempty"` // from Hack Club Auth, for prefilling
 }
 
-const userCols = `id, coalesce(hca_id, ''), email, name, slack_id, verification_status`
+const userCols = `id, coalesce(hca_id, ''), email, name, slack_id, verification_status, address`
 
 func scanUser(row pgx.Row) (*User, error) {
 	var u User
-	err := row.Scan(&u.ID, &u.HCAID, &u.Email, &u.Name, &u.SlackID, &u.VerificationStatus)
+	err := row.Scan(&u.ID, &u.HCAID, &u.Email, &u.Name, &u.SlackID, &u.VerificationStatus, &u.Address)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -63,20 +64,22 @@ func (s *Store) UpsertUser(ctx context.Context, id auth.Identity) (*User, error)
 		return nil, err
 	}
 	defer tx.Rollback(ctx)
-	args := []any{id.ID, id.Email, id.Name, id.SlackID, id.VerificationStatus}
+	args := []any{id.ID, id.Email, id.Name, id.SlackID, id.VerificationStatus, id.Address}
 	u, err := scanUser(tx.QueryRow(ctx, `
-		UPDATE users SET email = $2, name = $3, slack_id = $4, verification_status = $5, last_login_at = now()
+		UPDATE users SET email = $2, name = $3, slack_id = $4, verification_status = $5,
+			address = coalesce($6, address), last_login_at = now()
 		WHERE hca_id = $1 RETURNING `+userCols, args...))
 	if errors.Is(err, ErrNotFound) {
 		u, err = scanUser(tx.QueryRow(ctx, `
-			UPDATE users SET hca_id = $1, email = $2, name = $3, slack_id = $4, verification_status = $5, last_login_at = now()
+			UPDATE users SET hca_id = $1, email = $2, name = $3, slack_id = $4, verification_status = $5,
+				address = coalesce($6, address), last_login_at = now()
 			WHERE id = (SELECT id FROM users WHERE hca_id IS NULL AND lower(email) = lower($2) LIMIT 1)
 			RETURNING `+userCols, args...))
 	}
 	if errors.Is(err, ErrNotFound) {
 		u, err = scanUser(tx.QueryRow(ctx, `
-			INSERT INTO users (hca_id, email, name, slack_id, verification_status)
-			VALUES ($1, $2, $3, $4, $5) RETURNING `+userCols, args...))
+			INSERT INTO users (hca_id, email, name, slack_id, verification_status, address)
+			VALUES ($1, $2, $3, $4, $5, $6) RETURNING `+userCols, args...))
 	}
 	if err != nil {
 		return nil, err
@@ -103,7 +106,7 @@ func (s *Store) CreateSession(ctx context.Context, userID int64, ttl time.Durati
 
 func (s *Store) UserBySession(ctx context.Context, tok string) (*User, error) {
 	return scanUser(s.pool.QueryRow(ctx, `
-		SELECT u.id, coalesce(u.hca_id, ''), u.email, u.name, u.slack_id, u.verification_status
+		SELECT u.id, coalesce(u.hca_id, ''), u.email, u.name, u.slack_id, u.verification_status, u.address
 		FROM sessions s JOIN users u ON u.id = s.user_id
 		WHERE s.token_hash = $1 AND s.expires_at > now()`, hashToken(tok)))
 }

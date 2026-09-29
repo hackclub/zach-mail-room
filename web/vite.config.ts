@@ -21,11 +21,16 @@ export default defineConfig({
 	server: {
 		port: 5173,
 		strictPort: true,
-		proxy: {
-			'/api': backend,
-			'/auth': backend,
-			'/healthz': backend
-		}
+		// Listen beyond localhost so the app is reachable over Tailscale
+		// (http://porygon:5173). Vite keeps the Host header when proxying, which
+		// the Go server uses to pick the matching OAuth redirect (EXTRA_BASE_URLS).
+		host: true,
+		allowedHosts: ['localhost', 'porygon', '.ts.net'],
+		// xfwd sends X-Forwarded-Host, which the Go server uses to pick the OAuth
+		// redirect for whichever origin (localhost / porygon) the browser is on.
+		proxy: Object.fromEntries(
+			['/api', '/auth', '/healthz'].map((p) => [p, { target: backend, xfwd: true }])
+		)
 	},
 	test: {
 		include: ['src/**/*.test.ts'],

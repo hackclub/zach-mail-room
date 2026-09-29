@@ -72,7 +72,7 @@ func run(log *slog.Logger) error {
 		Store:  store.New(pool),
 		Provider: auth.NewHCA(auth.HCAConfig{
 			BaseURL: cfg.HCABaseURL, ClientID: cfg.HCAClientID, ClientSecret: cfg.HCAClientSecret,
-			RedirectURL: cfg.OAuthRedirectURL(), Scopes: cfg.HCAScopes,
+			Scopes: cfg.HCAScopes,
 		}),
 		Authors:   dir,
 		Warehouse: theseus.New(cfg.TheseusBaseURL, cfg.TheseusAPIKey, nil),
@@ -87,7 +87,7 @@ func run(log *slog.Logger) error {
 	}
 	errc := make(chan error, 1)
 	go func() {
-		log.Info("listening", "addr", srv.Addr, "base_url", cfg.BaseURL)
+		log.Info("listening", "addr", srv.Addr, "origins", cfg.Origins())
 		errc <- srv.ListenAndServe()
 	}()
 	select {

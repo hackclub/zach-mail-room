@@ -10,8 +10,11 @@ import (
 )
 
 type Config struct {
-	Port          string
-	BaseURL       string // public origin, e.g. https://swag.hackclub.com
+	Port    string
+	BaseURL string // public origin, e.g. https://swag.hackclub.com
+	// Other origins the app is reachable at (e.g. http://porygon:5173 over
+	// Tailscale). Each one's /auth/callback must be registered with Hack Club Auth.
+	ExtraBaseURLs []string
 	DatabaseURL   string
 	SessionSecret string
 
@@ -57,7 +60,7 @@ func Load(getenv func(string) string) (*Config, error) {
 		HCABaseURL:              strings.TrimRight(get("HCA_BASE_URL", "https://auth.hackclub.com"), "/"),
 		HCAClientID:             get("HCA_CLIENT_ID", ""),
 		HCAClientSecret:         get("HCA_CLIENT_SECRET", ""),
-		HCAScopes:               get("HCA_SCOPES", "openid email name slack_id verification_status"),
+		HCAScopes:               get("HCA_SCOPES", "openid email name slack_id verification_status address phone"),
 		TheseusBaseURL:          strings.TrimRight(get("THESEUS_BASE_URL", "https://mail.hackclub.com"), "/"),
 		TheseusAPIKey:           get("THESEUS_API_KEY", ""),
 		TheseusOrderTag:         get("THESEUS_ORDER_TAG", "zach-mail-room"),
@@ -72,6 +75,17 @@ func Load(getenv func(string) string) (*Config, error) {
 		if e = normalizeEmail(e); e != "" {
 			c.AdminEmails = append(c.AdminEmails, e)
 		}
+	}
+
+	for _, u := range strings.Split(getenv("EXTRA_BASE_URLS"), ",") {
+		u = strings.TrimRight(strings.TrimSpace(u), "/")
+		if u == "" {
+			continue
+		}
+		if !strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "https://") {
+			return nil, fmt.Errorf("EXTRA_BASE_URLS: %q must be an absolute http(s) origin", u)
+		}
+		c.ExtraBaseURLs = append(c.ExtraBaseURLs, u)
 	}
 
 	var missing []string
@@ -96,9 +110,37 @@ func Load(getenv func(string) string) (*Config, error) {
 	return c, nil
 }
 
-func (c *Config) OAuthRedirectURL() string { return c.BaseURL + "/auth/callback" }
+// Origins is BASE_URL followed by EXTRA_BASE_URLS.
+func (c *Config) Origins() []string { return append([]string{c.BaseURL}, c.ExtraBaseURLs...) }
 
-func (c *Config) SecureCookies() bool { return strings.HasPrefix(c.BaseURL, "https://") }
+func (c *Config) IsAllowedOrigin(origin string) bool {
+	for _, o := range c.Origins() {
+		if o == origin {
+			return true
+		}
+	}
+	return false
+}
+
+// LookupOrigin returns the configured origin whose host is host, if any.
+func (c *Config) LookupOrigin(host string) (string, bool) {
+	for _, o := range c.Origins() {
+		if strings.EqualFold(strings.TrimPrefix(strings.TrimPrefix(o, "https://"), "http://"), strings.TrimSpace(host)) {
+			return o, true
+		}
+	}
+	return "", false
+}
+
+// OriginForHost picks the configured origin matching a request's host, so
+// OAuth round-trips and cookies stay on the origin the user is actually
+// using. Unknown hosts get BASE_URL.
+func (c *Config) OriginForHost(host string) string {
+	if o, ok := c.LookupOrigin(host); ok {
+		return o
+	}
+	return c.BaseURL
+}
 
 func (c *Config) IsAdminEmail(email string) bool {
 	email = normalizeEmail(email)

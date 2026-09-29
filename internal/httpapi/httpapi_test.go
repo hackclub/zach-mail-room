@@ -30,14 +30,19 @@ import (
 
 type fakeProvider struct{ ids map[string]auth.Identity }
 
-func (f fakeProvider) AuthCodeURL(state string) string {
-	return "https://auth.example/oauth/authorize?state=" + url.QueryEscape(state)
+func (f fakeProvider) AuthCodeURL(state, redirectURL string) string {
+	return "https://auth.example/oauth/authorize?state=" + url.QueryEscape(state) + "&redirect_uri=" + url.QueryEscape(redirectURL)
 }
 
-func (f fakeProvider) Exchange(_ context.Context, code string) (*auth.Identity, error) {
+// Exchange encodes the expected redirect in the code ("code@redirect") to prove
+// the callback reuses the redirect_uri the flow started with.
+func (f fakeProvider) Exchange(_ context.Context, code, redirectURL string) (*auth.Identity, error) {
 	id, ok := f.ids[code]
 	if !ok {
 		return nil, fmt.Errorf("bad code")
+	}
+	if want, ok := f.ids[code+"@redirect"]; ok && want.ID != redirectURL {
+		return nil, fmt.Errorf("redirect_uri mismatch: %s", redirectURL)
 	}
 	return &id, nil
 }
@@ -87,6 +92,7 @@ func newHarness(t *testing.T) *harness {
 	st := store.New(dbtest.New(t))
 	cfg := &config.Config{
 		BaseURL:               "http://app.test",
+		ExtraBaseURLs:         []string{"http://porygon:5173"},
 		AdminEmails:           []string{adminEmail},
 		TheseusOrderTag:       "zach-mail-room",
 		HCBShippingPaymentURL: "https://hcb.hackclub.com/donations/start/swag",
@@ -97,6 +103,9 @@ func newHarness(t *testing.T) *harness {
 		Store:  st,
 		Provider: fakeProvider{ids: map[string]auth.Identity{
 			"code-user": {ID: "ident!user", Email: userEmail, Name: "Hacker"},
+			"code-porygon": {ID: "ident!p", Email: "p@example.com", Name: "P",
+				Address: &swag.Address{FirstName: "P", LastName: "Q", Line1: "15 Falls Rd", City: "Shelburne", State: "VT", PostalCode: "05482", Country: "US"}},
+			"code-porygon@redirect": {ID: "http://porygon:5173/auth/callback"},
 		}},
 		Authors:   authors.Static{authorEmail: true},
 		Warehouse: wh,
@@ -546,5 +555,105 @@ func TestImportedInternalNotesAreAdminOnly(t *testing.T) {
 	h.do(h.client(adminEmail), "GET", "/api/admin/requests", nil, &all)
 	if all.Requests[0]["internal_note"] != "Payment URL: https://dashboard.stripe.com/secret" {
 		t.Errorf("admin should see internal_note: %v", all.Requests[0])
+	}
+}
+
+func TestLoginUsesTheOriginTheUserIsOn(t *testing.T) {
+	h := newHarness(t)
+	c := &http.Client{Jar: newJar(), CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	get := func(path string) *http.Response {
+		req, _ := http.NewRequest("GET", h.srv.URL+path, nil)
+		req.Host = "porygon:5173" // as forwarded by the Vite dev proxy over Tailscale
+		resp, err := c.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp
+	}
+	loc, _ := url.Parse(get("/auth/login").Header.Get("Location"))
+	if got := loc.Query().Get("redirect_uri"); got != "http://porygon:5173/auth/callback" {
+		t.Fatalf("redirect_uri = %q", got)
+	}
+	resp := get("/auth/callback?code=code-porygon&state=" + url.QueryEscape(loc.Query().Get("state")))
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("callback = %d", resp.StatusCode)
+	}
+	// The browser stays on porygon:5173, so its session cookie belongs to that host.
+	req, _ := http.NewRequest("GET", h.srv.URL+"/api/me", nil)
+	req.Host = "porygon:5173"
+	meResp, err := c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var me meResponse
+	json.NewDecoder(meResp.Body).Decode(&me)
+	meResp.Body.Close()
+	if me.User == nil || me.User.Address == nil || me.User.Address.Line1 != "15 Falls Rd" {
+		t.Fatalf("me should carry the HCA address for prefilling: %+v", me.User)
+	}
+
+	// Unknown hosts fall back to BASE_URL.
+	req, _ = http.NewRequest("GET", h.srv.URL+"/auth/login", nil)
+	req.Host = "evil.example"
+	r2, _ := c.Do(req)
+	r2.Body.Close()
+	loc2, _ := url.Parse(r2.Header.Get("Location"))
+	if got := loc2.Query().Get("redirect_uri"); got != "http://app.test/auth/callback" {
+		t.Fatalf("fallback redirect_uri = %q", got)
+	}
+}
+
+func TestMutationsAcceptConfiguredOrigins(t *testing.T) {
+	h := newHarness(t)
+	c := h.client(userEmail)
+	for origin, want := range map[string]int{"http://porygon:5173": 422, "http://app.test": 422, "http://evil.example": 403} {
+		req, _ := http.NewRequest("POST", h.srv.URL+"/api/requests", strings.NewReader(`{"lines":[]}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Origin", origin)
+		resp, _ := c.Do(req)
+		resp.Body.Close()
+		if resp.StatusCode != want {
+			t.Errorf("Origin %s -> %d, want %d", origin, resp.StatusCode, want)
+		}
+	}
+}
+
+func TestImportedRequestsCannotBeShippedAgain(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	h.store.ImportRequest(ctx, importer.Request{
+		Source: "fillout", ExternalID: "sub-1", Email: userEmail, Address: usAddr,
+		Lines: []importer.SKULine{{SKU: "Sti/A", Quantity: 1}}, Status: swag.StatusPending,
+		AirtableRecordID: "recAAA", CreatedAt: time.Now(),
+	}, nil)
+	all, _ := h.store.ListRequests(ctx, "")
+	if code := h.do(h.client(adminEmail), "POST", fmt.Sprintf("/api/admin/requests/%d/dispatch", all[0].ID), map[string]any{}, nil); code != 409 {
+		t.Fatalf("dispatching an imported request = %d, want 409", code)
+	}
+	if len(h.wh.orders) != 0 {
+		t.Fatal("no warehouse order may be created for imported requests")
+	}
+}
+
+func TestLoginHonorsForwardedHostFromDevProxy(t *testing.T) {
+	h := newHarness(t)
+	c := h.client("")
+	for fwd, want := range map[string]string{
+		"porygon:5173":         "http://porygon:5173/auth/callback",
+		"evil.example":         "http://app.test/auth/callback", // only allowlisted origins
+		"porygon:5173, x.test": "http://porygon:5173/auth/callback",
+	} {
+		req, _ := http.NewRequest("GET", h.srv.URL+"/auth/login", nil)
+		req.Header.Set("X-Forwarded-Host", fwd)
+		resp, err := c.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		loc, _ := url.Parse(resp.Header.Get("Location"))
+		if got := loc.Query().Get("redirect_uri"); got != want {
+			t.Errorf("X-Forwarded-Host %q -> %q, want %q", fwd, got, want)
+		}
 	}
 }

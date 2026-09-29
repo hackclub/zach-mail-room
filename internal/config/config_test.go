@@ -37,14 +37,8 @@ func TestLoadDefaults(t *testing.T) {
 	if c.StaticDir != "web/build" {
 		t.Errorf("StaticDir = %q", c.StaticDir)
 	}
-	if c.OAuthRedirectURL() != "http://localhost:8080/auth/callback" {
-		t.Errorf("OAuthRedirectURL = %q", c.OAuthRedirectURL())
-	}
 	if c.AirtableAuthorsBaseID != "app3A5kJwYqxMLOgh" {
 		t.Errorf("AirtableAuthorsBaseID = %q", c.AirtableAuthorsBaseID)
-	}
-	if c.SecureCookies() {
-		t.Error("SecureCookies should be false for http BASE_URL")
 	}
 }
 
@@ -82,17 +76,50 @@ func TestAdminEmailsNormalized(t *testing.T) {
 	}
 }
 
-func TestSecureCookiesForHTTPS(t *testing.T) {
+func TestBaseURLTrailingSlashTrimmed(t *testing.T) {
 	e := validEnv()
 	e["BASE_URL"] = "https://swag.hackclub.com/"
 	c, err := Load(env(e))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !c.SecureCookies() {
-		t.Error("SecureCookies should be true for https")
+	if got := c.Origins(); len(got) != 1 || got[0] != "https://swag.hackclub.com" {
+		t.Errorf("Origins = %v", got)
 	}
-	if c.OAuthRedirectURL() != "https://swag.hackclub.com/auth/callback" {
-		t.Errorf("trailing slash not trimmed: %q", c.OAuthRedirectURL())
+}
+
+func TestDefaultScopesIncludeAddressAndPhone(t *testing.T) {
+	c, _ := Load(env(validEnv()))
+	for _, s := range []string{"openid", "email", "name", "slack_id", "verification_status", "address", "phone"} {
+		if !strings.Contains(" "+c.HCAScopes+" ", " "+s+" ") {
+			t.Errorf("default scopes %q missing %q", c.HCAScopes, s)
+		}
+	}
+}
+
+func TestExtraBaseURLs(t *testing.T) {
+	e := validEnv()
+	e["BASE_URL"] = "http://localhost:5173"
+	e["EXTRA_BASE_URLS"] = " http://porygon:5173/ , ,"
+	c, err := Load(env(e))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Origins(); len(got) != 2 || got[0] != "http://localhost:5173" || got[1] != "http://porygon:5173" {
+		t.Fatalf("Origins = %v", got)
+	}
+	if o := c.OriginForHost("porygon:5173"); o != "http://porygon:5173" {
+		t.Errorf("OriginForHost(porygon) = %q", o)
+	}
+	if o := c.OriginForHost("evil.example"); o != "http://localhost:5173" {
+		t.Errorf("unknown host should fall back to BASE_URL, got %q", o)
+	}
+	if !c.IsAllowedOrigin("http://porygon:5173") || c.IsAllowedOrigin("http://evil.example") {
+		t.Error("IsAllowedOrigin wrong")
+	}
+
+	e["EXTRA_BASE_URLS"] = "porygon:5173"
+	if _, err := Load(env(e)); err == nil {
+		t.Error("EXTRA_BASE_URLS entries must be absolute http(s) origins")
 	}
 }

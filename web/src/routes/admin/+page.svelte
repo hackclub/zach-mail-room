@@ -132,7 +132,7 @@
 						</td>
 						<td class="row">
 							{#if r.status === 'awaiting_payment'}<button onclick={() => act(r.id, 'mark-paid')}>Mark paid</button>{/if}
-							{#if r.status === 'pending'}<button onclick={() => act(r.id, 'dispatch')}>Ship</button>{/if}
+							{#if r.status === 'pending' && r.source === 'app'}<button onclick={() => act(r.id, 'dispatch')}>Ship</button>{/if}
 							{#if r.status === 'pending' || r.status === 'awaiting_payment'}<button class="secondary" onclick={() => reject(r.id)}>Reject</button>{/if}
 							{#if r.status === 'dispatched' && r.theseus_order_id}<button class="secondary" onclick={() => act(r.id, 'refresh')}>Refresh tracking</button>{/if}
 						</td>

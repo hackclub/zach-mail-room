@@ -112,7 +112,7 @@ func New(d Deps) http.Handler {
 func (s *server) csrf(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead && strings.HasPrefix(r.URL.Path, "/api/") {
-			if o := r.Header.Get("Origin"); o != "" && o != s.Config.BaseURL {
+			if o := r.Header.Get("Origin"); o != "" && !s.Config.IsAllowedOrigin(o) {
 				writeErr(w, http.StatusForbidden, "cross-origin request refused")
 				return
 			}
@@ -204,15 +204,28 @@ func (s *server) healthz(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+// origin is the configured origin the user is on (BASE_URL or one of
+// EXTRA_BASE_URLS), matched by X-Forwarded-Host (set by the Vite dev proxy and
+// ingresses) or else Host. OAuth callbacks and cookies stay on it. Trusting the
+// header is safe: it can only select among allowlisted origins.
+func (s *server) origin(r *http.Request) string {
+	if o, ok := s.Config.LookupOrigin(strings.Split(r.Header.Get("X-Forwarded-Host"), ",")[0]); ok {
+		return o
+	}
+	return s.Config.OriginForHost(r.Host)
+}
+
+func (s *server) secure(r *http.Request) bool { return strings.HasPrefix(s.origin(r), "https://") }
+
 func (s *server) login(w http.ResponseWriter, r *http.Request) {
 	b := make([]byte, 24)
 	rand.Read(b)
 	state := base64.RawURLEncoding.EncodeToString(b)
 	http.SetCookie(w, &http.Cookie{
 		Name: stateCookie, Value: state, Path: "/auth", MaxAge: 600,
-		HttpOnly: true, Secure: s.Config.SecureCookies(), SameSite: http.SameSiteLaxMode,
+		HttpOnly: true, Secure: s.secure(r), SameSite: http.SameSiteLaxMode,
 	})
-	http.Redirect(w, r, s.Provider.AuthCodeURL(state), http.StatusFound)
+	http.Redirect(w, r, s.Provider.AuthCodeURL(state, s.origin(r)+"/auth/callback"), http.StatusFound)
 }
 
 func (s *server) callback(w http.ResponseWriter, r *http.Request) {
@@ -227,7 +240,7 @@ func (s *server) callback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "sign-in was cancelled: "+e, http.StatusBadRequest)
 		return
 	}
-	id, err := s.Provider.Exchange(r.Context(), r.URL.Query().Get("code"))
+	id, err := s.Provider.Exchange(r.Context(), r.URL.Query().Get("code"), s.origin(r)+"/auth/callback")
 	if err != nil {
 		s.Log.Warn("hca exchange failed", "err", err)
 		http.Error(w, "couldn't sign you in with Hack Club Auth", http.StatusBadGateway)
@@ -245,7 +258,7 @@ func (s *server) callback(w http.ResponseWriter, r *http.Request) {
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name: sessionCookie, Value: tok, Path: "/", MaxAge: int(sessionTTL.Seconds()),
-		HttpOnly: true, Secure: s.Config.SecureCookies(), SameSite: http.SameSiteLaxMode,
+		HttpOnly: true, Secure: s.secure(r), SameSite: http.SameSiteLaxMode,
 	})
 	http.Redirect(w, r, "/", http.StatusFound)
 }
@@ -511,6 +524,10 @@ func (s *server) adminDispatch(w http.ResponseWriter, r *http.Request, v viewer)
 		return
 	} else if err != nil {
 		s.serverErr(w, err)
+		return
+	}
+	if req.Source != "app" {
+		writeErr(w, http.StatusConflict, "imported requests ship through the Airtable warehouse base, not from here")
 		return
 	}
 	if !swag.CanTransition(req.Status, swag.StatusDispatched) {

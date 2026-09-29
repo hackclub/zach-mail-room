@@ -55,8 +55,10 @@ func TestParseFillout(t *testing.T) {
 		t.Errorf("intl = %+v", intl)
 	}
 
-	if reqs[2].Status != swag.StatusPending || !strings.Contains(reqs[2].InternalNote, "never sent to the warehouse") {
-		t.Errorf("unsent = %+v", reqs[2])
+	// An Airtable shipment record exists, so it is queued even if the export's
+	// Send To Warehouse flag hadn't synced yet. Never re-ship it from this app.
+	if reqs[2].Status != swag.StatusDispatched || !strings.Contains(reqs[2].InternalNote, "Send To Warehouse") {
+		t.Errorf("queued-but-unsynced = %+v", reqs[2])
 	}
 
 	bad := reqs[3]

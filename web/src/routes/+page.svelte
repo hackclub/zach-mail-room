@@ -2,15 +2,15 @@
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { api, ApiError, formatCents, isInternational } from '$lib/api';
+	import { blankAddress, prefillAddress } from '$lib/address';
 	import { cartErrors, cartLines, emptyCart, setQuantity, totalQuantity, type Cart } from '$lib/cart';
 	import { session } from '$lib/session.svelte';
 	import type { Address, Catalog, SwagRequest } from '$lib/types';
 
 	let catalog = $state<Catalog | null>(null);
 	let cart = $state<Cart>(emptyCart());
-	let address = $state<Address>({
-		first_name: '', last_name: '', line_1: '', line_2: '', city: '', state: '', postal_code: '', country: 'US', phone_number: ''
-	});
+	// Prefilled from the person's Hack Club Auth address when they have one.
+	let address = $state<Address>(prefillAddress(blankAddress(), session.me?.user?.address));
 	let note = $state('');
 	let error = $state('');
 	let submitting = $state(false);

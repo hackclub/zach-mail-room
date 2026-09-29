@@ -79,7 +79,7 @@ export type Submission = {
 	created_at: string;
 };
 
-export type User = { id: number; email: string; name: string; slack_id: string };
+export type User = { id: number; email: string; name: string; slack_id: string; address?: Address };
 export type Me = { user: User | null; roles: { author: boolean; admin: boolean } };
 
 export type WarehouseSKU = {

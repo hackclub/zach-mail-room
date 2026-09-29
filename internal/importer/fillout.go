@@ -144,9 +144,15 @@ func ParseFillout(r io.Reader, label string) ([]Request, []string, error) {
 			req.ShippingFeeCents = paid
 			req.PaidAt = &created
 		}
-		if !strings.EqualFold(get(colSend), "true") {
+		// A row with an Airtable shipment record is already queued for the
+		// warehouse; the export's Send To Warehouse flag can lag behind that.
+		// Only rows with no record at all still need a decision.
+		switch {
+		case req.AirtableRecordID == "":
 			req.Status = swag.StatusPending
-			notes = append(notes, "It was never sent to the warehouse; review before shipping.")
+			notes = append(notes, "No Airtable shipment record; review before shipping.")
+		case !strings.EqualFold(get(colSend), "true"):
+			notes = append(notes, "Send To Warehouse was not yet set in the export; queued via Airtable "+req.AirtableRecordID+".")
 		}
 		if n := get(colNotes); n != "" {
 			notes = append(notes, n)
