@@ -96,6 +96,37 @@ git -C "$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")" p
 If `git push` is rejected because main moved, fetch, rebase, re-test, and push again. Never
 force-push `main`. If a migration filename collides with one that just landed, renumber yours.
 
+## Importing historical requests (Fillout → Airtable era)
+
+Before this app, each item had its own Fillout form. Rows went to Airtable `shipment_requests`
+and then to Zenventory. `cmd/import` loads those exports:
+
+```sh
+make import DRY=1 FILES='"…/Fillout Hack Club Mini-Magazine Request results.csv" "…/T-Shirt….csv"'
+make import TRACKING=/tmp/zmr-tracking.csv FILES='…'   # writes to $DATABASE_URL
+```
+
+- The import is idempotent on the Fillout `Submission ID` (`swag_requests.source='fillout'`,
+  `external_id`), so re-exports are safe to re-run.
+- Contents come from `custom_instructions` (`"10 Pri/Bok/Mini25/1st, 50 Sti/Bra/O&H/Lap"`).
+  Unknown SKUs become **hidden** items, named from mail.hackclub.com.
+- `Send To Warehouse=true` → `dispatched`, and `airtable_record_id` is set to `Created records`.
+  Otherwise the request is `pending`, with an internal note to review it before shipping.
+  "Requestor paid N USD" → `shipping_fee_cents` and `paid_at`.
+- People are matched by email. A person with no account gets a placeholder user (`hca_id NULL`),
+  which their first Hack Club Auth sign-in claims. Imported history then counts toward their
+  limits and cooldown.
+- Airtable `internal_notes` (Stripe links, expense codes) go to `internal_note`, which only
+  admins see. `admin_note` is shown to the requester.
+- Tracking: the Zenventory `order_number` equals the Airtable record id. Export it from the
+  data warehouse (`agh_fulfillment_zenventory.customer_orders` JOIN `shipments`, columns
+  `order_number,tracking_number,carrier,shipped_date`) and pass it with `-tracking`.
+- **Exports and tracking files contain personal data. Keep them outside the repo (it's
+  public).**
+- Imported 2026-09-29 into the dev DB: Mini-Magazine (320), Staff T-Shirt (29), Hackpad Poster
+  (66), Sunbeam Poster (34). That's 449 requests (446 dispatched, 442 with tracking; 3 pending
+  review) across 372 people.
+
 ## Deploying (Orchard)
 
 - One container: `Dockerfile`, which builds the PWA and a static Go binary on distroless. It

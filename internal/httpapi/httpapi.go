@@ -313,6 +313,13 @@ func (s *server) view(r *store.Request) requestView {
 	return v
 }
 
+// userView is what a requester sees: no admin-only notes.
+func (s *server) userView(r *store.Request) requestView {
+	cp := *r
+	cp.InternalNote = ""
+	return s.view(&cp)
+}
+
 func (s *server) views(rs []*store.Request) []requestView {
 	out := make([]requestView, len(rs))
 	for i, r := range rs {
@@ -327,7 +334,11 @@ func (s *server) myRequests(w http.ResponseWriter, r *http.Request, v viewer) {
 		s.serverErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"requests": s.views(rs)})
+	out := make([]requestView, len(rs))
+	for i, r := range rs {
+		out[i] = s.userView(r)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"requests": out})
 }
 
 func (s *server) createRequest(w http.ResponseWriter, r *http.Request, v viewer) {
@@ -378,7 +389,7 @@ func (s *server) createRequest(w http.ResponseWriter, r *http.Request, v viewer)
 		s.serverErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, s.view(req))
+	writeJSON(w, http.StatusCreated, s.userView(req))
 }
 
 func isRuleErr(err error) bool {
@@ -401,7 +412,11 @@ func (s *server) cancelRequest(w http.ResponseWriter, r *http.Request, v viewer)
 		writeErr(w, http.StatusNotFound, "request not found")
 		return
 	}
-	s.respond(w)(s.Store.TransitionRequest(r.Context(), id, swag.StatusCancelled, ""))
+	req, err = s.Store.TransitionRequest(r.Context(), id, swag.StatusCancelled, "")
+	if err == nil {
+		req.InternalNote = ""
+	}
+	s.respondRequest(w, req, err)
 }
 
 // ---- YSWS author flow ----

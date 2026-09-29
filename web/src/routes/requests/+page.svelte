@@ -48,6 +48,7 @@
 					{#if r.payment_url}<a class="button" href={r.payment_url}>Pay shipping on HCB</a>{/if}
 				</p>
 			{/if}
+			{#if r.mailed_at}<p>Mailed {new Date(r.mailed_at).toLocaleDateString()}</p>{/if}
 			{#if r.tracking_number}<p>Tracking: {r.carrier} {r.tracking_number}</p>{/if}
 			{#if r.admin_note}<p class="muted">Note from Hack Club: {r.admin_note}</p>{/if}
 			{#if r.status === 'pending' || r.status === 'awaiting_payment'}

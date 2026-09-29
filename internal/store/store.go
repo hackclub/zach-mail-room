@@ -10,7 +10,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -44,7 +43,7 @@ type User struct {
 	VerificationStatus string `json:"verification_status"`
 }
 
-const userCols = `id, hca_id, email, name, slack_id, verification_status`
+const userCols = `id, coalesce(hca_id, ''), email, name, slack_id, verification_status`
 
 func scanUser(row pgx.Row) (*User, error) {
 	var u User
@@ -55,15 +54,34 @@ func scanUser(row pgx.Row) (*User, error) {
 	return &u, err
 }
 
+// UpsertUser records a Hack Club Auth sign-in. A returning user is matched by
+// HCA id; a first sign-in claims any imported placeholder with the same email
+// (so historical requests count toward their limits); otherwise a user is created.
 func (s *Store) UpsertUser(ctx context.Context, id auth.Identity) (*User, error) {
-	return scanUser(s.pool.QueryRow(ctx, `
-		INSERT INTO users (hca_id, email, name, slack_id, verification_status)
-		VALUES ($1, $2, $3, $4, $5)
-		ON CONFLICT (hca_id) DO UPDATE SET
-			email = EXCLUDED.email, name = EXCLUDED.name, slack_id = EXCLUDED.slack_id,
-			verification_status = EXCLUDED.verification_status, last_login_at = now()
-		RETURNING `+userCols,
-		id.ID, id.Email, id.Name, id.SlackID, id.VerificationStatus))
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	args := []any{id.ID, id.Email, id.Name, id.SlackID, id.VerificationStatus}
+	u, err := scanUser(tx.QueryRow(ctx, `
+		UPDATE users SET email = $2, name = $3, slack_id = $4, verification_status = $5, last_login_at = now()
+		WHERE hca_id = $1 RETURNING `+userCols, args...))
+	if errors.Is(err, ErrNotFound) {
+		u, err = scanUser(tx.QueryRow(ctx, `
+			UPDATE users SET hca_id = $1, email = $2, name = $3, slack_id = $4, verification_status = $5, last_login_at = now()
+			WHERE id = (SELECT id FROM users WHERE hca_id IS NULL AND lower(email) = lower($2) LIMIT 1)
+			RETURNING `+userCols, args...))
+	}
+	if errors.Is(err, ErrNotFound) {
+		u, err = scanUser(tx.QueryRow(ctx, `
+			INSERT INTO users (hca_id, email, name, slack_id, verification_status)
+			VALUES ($1, $2, $3, $4, $5) RETURNING `+userCols, args...))
+	}
+	if err != nil {
+		return nil, err
+	}
+	return u, tx.Commit(ctx)
 }
 
 func hashToken(tok string) []byte {
@@ -85,7 +103,8 @@ func (s *Store) CreateSession(ctx context.Context, userID int64, ttl time.Durati
 
 func (s *Store) UserBySession(ctx context.Context, tok string) (*User, error) {
 	return scanUser(s.pool.QueryRow(ctx, `
-		SELECT `+prefixed("u.", userCols)+` FROM sessions s JOIN users u ON u.id = s.user_id
+		SELECT u.id, coalesce(u.hca_id, ''), u.email, u.name, u.slack_id, u.verification_status
+		FROM sessions s JOIN users u ON u.id = s.user_id
 		WHERE s.token_hash = $1 AND s.expires_at > now()`, hashToken(tok)))
 }
 
@@ -165,9 +184,13 @@ type Request struct {
 	PaidAt           *time.Time    `json:"paid_at"`
 	Note             string        `json:"note"`
 	AdminNote        string        `json:"admin_note"`
+	InternalNote     string        `json:"internal_note,omitempty"` // admin-only
 	TheseusOrderID   string        `json:"theseus_order_id"`
 	TrackingNumber   string        `json:"tracking_number"`
 	Carrier          string        `json:"carrier"`
+	MailedAt         *time.Time    `json:"mailed_at"`
+	Source           string        `json:"source"`
+	AirtableRecordID string        `json:"airtable_record_id,omitempty"`
 	CreatedAt        time.Time     `json:"created_at"`
 	Lines            []RequestLine `json:"lines"`
 }
@@ -247,16 +270,16 @@ func (s *Store) CreateRequest(ctx context.Context, nr NewRequest, check UsageChe
 
 const requestSelect = `
 	SELECT r.id, r.user_id, u.email, r.status, r.first_name, r.last_name, r.line_1, r.line_2, r.city, r.state,
-		r.postal_code, r.country, r.phone_number, r.shipping_fee_cents, r.paid_at, r.note, r.admin_note,
-		coalesce(r.theseus_order_id, ''), r.tracking_number, r.carrier, r.created_at
+		r.postal_code, r.country, r.phone_number, r.shipping_fee_cents, r.paid_at, r.note, r.admin_note, r.internal_note,
+		coalesce(r.theseus_order_id, ''), r.tracking_number, r.carrier, r.mailed_at, r.source, r.airtable_record_id, r.created_at
 	FROM swag_requests r JOIN users u ON u.id = r.user_id`
 
 func scanRequest(row pgx.Row) (*Request, error) {
 	var r Request
 	a := &r.Address
 	err := row.Scan(&r.ID, &r.UserID, &r.UserEmail, &r.Status, &a.FirstName, &a.LastName, &a.Line1, &a.Line2, &a.City, &a.State,
-		&a.PostalCode, &a.Country, &a.Phone, &r.ShippingFeeCents, &r.PaidAt, &r.Note, &r.AdminNote,
-		&r.TheseusOrderID, &r.TrackingNumber, &r.Carrier, &r.CreatedAt)
+		&a.PostalCode, &a.Country, &a.Phone, &r.ShippingFeeCents, &r.PaidAt, &r.Note, &r.AdminNote, &r.InternalNote,
+		&r.TheseusOrderID, &r.TrackingNumber, &r.Carrier, &r.MailedAt, &r.Source, &r.AirtableRecordID, &r.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -467,12 +490,4 @@ func mapErr(err error) error {
 		return fmt.Errorf("%w: %s", ErrConflict, pg.Detail)
 	}
 	return err
-}
-
-func prefixed(p, cols string) string {
-	parts := strings.Split(cols, ",")
-	for i, c := range parts {
-		parts[i] = p + strings.TrimSpace(c)
-	}
-	return strings.Join(parts, ", ")
 }

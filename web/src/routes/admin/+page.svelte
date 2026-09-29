@@ -118,20 +118,23 @@
 			<tbody>
 				{#each requests as r (r.id)}
 					<tr>
-						<td>{r.id}<div class="muted">{new Date(r.created_at).toLocaleDateString()}</div></td>
-						<td>{r.user_email}{#if r.note}<div class="muted">“{r.note}”</div>{/if}</td>
+						<td>{r.id}<div class="muted">{new Date(r.created_at).toLocaleDateString()}</div>
+							{#if r.source !== 'app'}<span class="badge" title={r.airtable_record_id}>imported · {r.source}</span>{/if}</td>
+						<td>{r.user_email}{#if r.note}<div class="muted">“{r.note}”</div>{/if}
+							{#if r.internal_note}<details><summary class="muted">internal note</summary><pre style="white-space: pre-wrap">{r.internal_note}</pre></details>{/if}</td>
 						<td>{#each r.lines as l}<div>{l.quantity} × {l.name} <span class="muted">{l.sku}</span></div>{/each}</td>
 						<td>{r.address.first_name} {r.address.last_name}<br />{r.address.city}, {r.address.state} {r.address.country}</td>
 						<td>
 							<span class="badge {r.status}">{statusLabel[r.status]}</span>
 							{#if r.shipping_fee_cents}<div class="muted">fee {formatCents(r.shipping_fee_cents)}{r.paid_at ? ' (paid)' : ''}</div>{/if}
+							{#if r.mailed_at}<div class="muted">mailed {new Date(r.mailed_at).toLocaleDateString()}</div>{/if}
 							{#if r.tracking_number}<div class="muted">{r.carrier} {r.tracking_number}</div>{/if}
 						</td>
 						<td class="row">
 							{#if r.status === 'awaiting_payment'}<button onclick={() => act(r.id, 'mark-paid')}>Mark paid</button>{/if}
 							{#if r.status === 'pending'}<button onclick={() => act(r.id, 'dispatch')}>Ship</button>{/if}
 							{#if r.status === 'pending' || r.status === 'awaiting_payment'}<button class="secondary" onclick={() => reject(r.id)}>Reject</button>{/if}
-							{#if r.status === 'dispatched'}<button class="secondary" onclick={() => act(r.id, 'refresh')}>Refresh tracking</button>{/if}
+							{#if r.status === 'dispatched' && r.theseus_order_id}<button class="secondary" onclick={() => act(r.id, 'refresh')}>Refresh tracking</button>{/if}
 						</td>
 					</tr>
 				{:else}

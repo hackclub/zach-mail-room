@@ -20,6 +20,7 @@ import (
 	"github.com/hackclub/zach-mail-room/internal/authors"
 	"github.com/hackclub/zach-mail-room/internal/config"
 	"github.com/hackclub/zach-mail-room/internal/db/dbtest"
+	"github.com/hackclub/zach-mail-room/internal/importer"
 	"github.com/hackclub/zach-mail-room/internal/store"
 	"github.com/hackclub/zach-mail-room/internal/swag"
 	"github.com/hackclub/zach-mail-room/internal/theseus"
@@ -517,4 +518,33 @@ func TestAuthorSubmissionFlow(t *testing.T) {
 func newJar() http.CookieJar {
 	j, _ := cookiejar.New(nil)
 	return j
+}
+
+func TestImportedInternalNotesAreAdminOnly(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	_, err := h.store.ImportRequest(ctx, importer.Request{
+		Source: "fillout", ExternalID: "sub-1", Email: userEmail, Name: "Hacker", Address: usAddr,
+		Lines: []importer.SKULine{{SKU: "Sti/A", Quantity: 1}}, Status: swag.StatusDispatched,
+		InternalNote: "Payment URL: https://dashboard.stripe.com/secret", CreatedAt: time.Now(),
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mine struct{ Requests []map[string]any }
+	h.do(h.client(userEmail), "GET", "/api/requests", nil, &mine)
+	if len(mine.Requests) != 1 {
+		t.Fatalf("imported request should show for its owner once they sign in: %+v", mine)
+	}
+	if _, ok := mine.Requests[0]["internal_note"]; ok {
+		t.Errorf("requester can see internal_note: %v", mine.Requests[0])
+	}
+	if mine.Requests[0]["source"] != "fillout" {
+		t.Errorf("source = %v", mine.Requests[0]["source"])
+	}
+	var all struct{ Requests []map[string]any }
+	h.do(h.client(adminEmail), "GET", "/api/admin/requests", nil, &all)
+	if all.Requests[0]["internal_note"] != "Payment URL: https://dashboard.stripe.com/secret" {
+		t.Errorf("admin should see internal_note: %v", all.Requests[0])
+	}
 }

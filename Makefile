@@ -4,7 +4,7 @@ ENV_FILE := $(shell scripts/env-file)
 LOAD_ENV := set -a; [ -f "$(ENV_FILE)" ] && . "$(ENV_FILE)"; set +a;
 TEST_DATABASE_URL ?= postgres://mailroom:mailroom@127.0.0.1:54329/mailroom?sslmode=disable
 
-.PHONY: help db db-down dev server web-dev web test test-go test-web check build docker env-path
+.PHONY: help db db-down dev server web-dev web test test-go test-web check build docker env-path import
 
 help: ## List targets
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-10s %s\n", $$1, $$2}'
@@ -48,3 +48,6 @@ build: web ## Build the server binary into bin/
 
 docker: ## Build the production image
 	docker build -t zach-mail-room .
+
+import: ## Import historical requests: make import FILES='"a.csv" "b.csv"' [TRACKING=t.csv] [DRY=1]
+	@$(LOAD_ENV) go run ./cmd/import $(if $(DRY),-dry-run) $(if $(TRACKING),-tracking "$(TRACKING)") $(FILES)

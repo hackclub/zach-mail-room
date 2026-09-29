@@ -53,6 +53,10 @@ export type SwagRequest = {
 	theseus_order_id: string;
 	tracking_number: string;
 	carrier: string;
+	mailed_at: string | null;
+	source: string; // 'app' | 'fillout' (imported history)
+	airtable_record_id?: string;
+	internal_note?: string; // admin-only
 	created_at: string;
 	lines: { item_id: number; sku: string; name: string; quantity: number }[];
 	payment_url?: string;
