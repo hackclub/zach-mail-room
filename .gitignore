@@ -1,0 +1,16 @@
+# Secrets: the real .env lives in the main worktree root and is never committed (public repo).
+.env
+.env.*
+!.env.example
+
+/bin/
+/tmp/
+*.test
+coverage.out
+
+web/node_modules/
+web/build/
+web/.svelte-kit/
+web/.vite/
+
+.DS_Store

@@ -1,0 +1,16 @@
+{
+	"name": "Hack Club Mail Room",
+	"short_name": "Mail Room",
+	"description": "Request Hack Club swag, and stock the warehouse with your YSWS materials.",
+	"start_url": "/",
+	"scope": "/",
+	"display": "standalone",
+	"background_color": "#f9fafc",
+	"theme_color": "#ec3750",
+	"icons": [
+		{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml" },
+		{ "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
+		{ "src": "/icon-512.png", "sizes": "512x512", "type": "image/png" },
+		{ "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+	]
+}

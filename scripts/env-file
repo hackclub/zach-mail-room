@@ -1,0 +1,7 @@
+#!/bin/sh
+# Prints the path of the shared .env: the root of the MAIN worktree, so every
+# worktree (e.g. ~/.paseo/worktrees/*/…) uses the same config without copying secrets.
+# Override with ENV_FILE=/path/to/.env.
+if [ -n "$ENV_FILE" ]; then echo "$ENV_FILE"; exit 0; fi
+common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || { echo ".env"; exit 0; }
+echo "$(dirname "$common")/.env"

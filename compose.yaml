@@ -1,0 +1,22 @@
+# Dev-only Postgres. One shared instance serves every worktree; each worktree's
+# tests create (and drop) their own throwaway databases, so they never collide.
+name: zach-mail-room
+services:
+  postgres:
+    image: postgres:18
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: mailroom
+      POSTGRES_PASSWORD: mailroom
+      POSTGRES_DB: mailroom
+    ports:
+      - "127.0.0.1:54329:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mailroom -d mailroom"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+volumes:
+  pgdata:
